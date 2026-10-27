@@ -1,30 +1,114 @@
-name: Temporary CLI isolation preflight
+name: Temporary CLI security validation
 'on':
   pull_request:
     branches:
     - main
     paths:
     - .github/workflows/temporary-cli-security.yml
-permissions: {}
+permissions:
+  contents: read
+concurrency:
+  group: temporary-cli-security-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  preflight:
+  validate:
     if: github.head_ref == 'security/temporary-cli-readonly-validation'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        module:
+        - library/social-and-messaging/x-twitter
+        - library/food-and-dining/recipe-goat
+        - library/commerce/fedex
+        - library/productivity/roam
+        - library/other/apartments
+        - library/marketing/klaviyo
+        - library/other/redfin
+        - library/developer-tools/scrape-creators
+        - library/travel/wanderlust-goat
+        - library/developer-tools/postman-explore
+        - library/monitoring/sentry
+        - library/cloud/render
+        - library/travel/flight-goat
+        - library/payments/stripe
+        - library/commerce/ebay
+        - library/media-and-entertainment/digg
+        - library/marketing/dub
+        - library/marketing/google-ads
+        - library/cloud/digitalocean
+        - library/payments/kalshi
+        - library/food-and-dining/allrecipes
+        - library/social-and-messaging/twilio
+        - library/food-and-dining/food52
+        - library/food-and-dining/dominos
+        - library/media-and-entertainment/pokeapi
+        - library/marketing/google-search-console
+        - library/productivity/notion
+        - library/sales-and-crm/contact-goat
+        - library/cloud/cloud-run-admin
+        - library/food-and-dining/ordertogo
+        - library/commerce/instacart
+        - library/food-and-dining/pagliacci
+        - library/productivity/cal-com
+        - library/food-and-dining/table-reservation-goat
+        - library/media-and-entertainment/steam-web
+    env:
+      GOFLAGS: -mod=readonly
+      GOTOOLCHAIN: go1.26.10
+      DIGG_LIVE_TESTS: '0'
+      PRINTING_PRESS_VERIFY: '1'
     steps:
+    - uses: actions/checkout@v6
+      with:
+        repository: BiscayneDev/shipyard-cli-library
+        ref: 6fc61a148cca78e7569dd383bd86eb5f43233a82
+        persist-credentials: false
     - uses: actions/setup-go@v6
       with:
         go-version: 1.26.10
         cache: false
-    - name: Fail-closed isolated loopback and toolchain probe only
+    - name: Verify exact source and isolated credentials
+      run: |-
+        test "$(git rev-parse HEAD)" = '6fc61a148cca78e7569dd383bd86eb5f43233a82'
+        test -z "$(git config --get-regexp 'http.*extraheader' || true)"
+    - name: Preload public dependencies and static scanner
+      working-directory: ${{ matrix.module }}
+      run: |
+        set -euo pipefail
+        # Download module data only. go mod download does not build or run target code.
+        go mod download all
+        # Build the public Go vulnerability tool, not target CLI source.
+        go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
+        mkdir -p "$RUNNER_TEMP/vulndb"
+        curl --fail --location --silent --show-error --max-time 90 https://vuln.go.dev/vulndb.zip -o "$RUNNER_TEMP/vulndb.zip"
+        python3 - "$RUNNER_TEMP/vulndb.zip" "$RUNNER_TEMP/vulndb" <<'DB'
+        import json, pathlib, sys, zipfile
+        root=pathlib.Path(sys.argv[2]).resolve()
+        with zipfile.ZipFile(sys.argv[1]) as z:
+            for info in z.infolist():
+                dest=(root/info.filename).resolve()
+                if not dest.is_relative_to(root) or info.external_attr >> 16 & 0o170000 == 0o120000:
+                    raise SystemExit('unsafe database archive path')
+            z.extractall(root)
+        assert (root/'index/modules.json').is_file()
+        print('OFFLINE_DB_METADATA', (root/'index/db.json').read_text())
+        DB
+        sha256sum "$RUNNER_TEMP/vulndb.zip"
+    - name: Isolated offline full tests
+      working-directory: ${{ matrix.module }}
       shell: bash
       run: |
         set -euo pipefail
         uid=$(id -u); gid=$(id -g)
         go_bin="$(go env GOROOT)/bin/go"
-        gomodcache=$(mktemp -d)
+        gomodcache=$(go env GOMODCACHE)
         clean_home=$(mktemp -d)
-        trap 'rm -rf "$clean_home" "$gomodcache"' EXIT
+        cp -a "$RUNNER_TEMP/vulndb" "$clean_home/vulndb"
+        cp "$(go env GOPATH)/bin/govulncheck" "$clean_home/govulncheck"
+        trap 'rm -rf "$clean_home"' EXIT
         cat > "$clean_home/test.sh" <<'TEST'
         set -euo pipefail
         test "$(id -u)" != 0
@@ -47,7 +131,14 @@ jobs:
         PROBE
         echo ISOLATION_READY
         test "$(go version)" = "go version go1.26.10 linux/amd64"
-        echo PREFLIGHT_PASS
+        echo "isolated-toolchain: $(go version)"
+        set +e
+        go test -p 2 -timeout 10m ./...
+        test_status=$?
+        "$HOME/govulncheck" -db "file://$HOME/vulndb" ./...
+        scan_status=$?
+        echo "TEST_EXIT=$test_status SCAN_EXIT=$scan_status"
+        if [ "$test_status" -ne 0 ] || [ "$scan_status" -ne 0 ]; then exit 1; fi
         TEST
         cat > "$clean_home/namespace.sh" <<'NAMESPACE'
         set -euo pipefail
