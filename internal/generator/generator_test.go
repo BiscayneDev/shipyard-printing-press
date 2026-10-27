@@ -1327,8 +1327,11 @@ func TestGenerateBrowserChromeTransport(t *testing.T) {
 
 	gomod, err := os.ReadFile(filepath.Join(outputDir, "go.mod"))
 	require.NoError(t, err)
-	assert.Contains(t, string(gomod), "go 1.26.3")
+	assert.Contains(t, string(gomod), "go 1.26.10")
 	assert.Contains(t, string(gomod), "github.com/enetx/surf")
+	assert.Contains(t, string(gomod), "github.com/klauspost/compress v1.18.7")
+	assert.Contains(t, string(gomod), "github.com/quic-go/quic-go v0.59.1")
+	assert.Contains(t, string(gomod), "golang.org/x/net v0.62.0")
 
 	clientGo, err := os.ReadFile(filepath.Join(outputDir, "internal", "client", "client.go"))
 	require.NoError(t, err)
@@ -1569,7 +1572,7 @@ func TestGenerateHTMLExtractionEndpoint(t *testing.T) {
 	require.FileExists(t, filepath.Join(outputDir, "internal", "cli", "html_extract.go"))
 	gomod, err := os.ReadFile(filepath.Join(outputDir, "go.mod"))
 	require.NoError(t, err)
-	assert.Contains(t, string(gomod), "golang.org/x/net v0.53.0")
+	assert.Contains(t, string(gomod), "golang.org/x/net v0.62.0")
 
 	runGoCommand(t, outputDir, "mod", "tidy")
 	binaryPath := filepath.Join(outputDir, "webhtml-pp-cli")
@@ -1966,7 +1969,7 @@ func TestGenerateStandardTransportForOfficialAPI(t *testing.T) {
 
 	gomod, err := os.ReadFile(filepath.Join(outputDir, "go.mod"))
 	require.NoError(t, err)
-	assert.Contains(t, string(gomod), "go 1.26.3")
+	assert.Contains(t, string(gomod), "go 1.26.10")
 	assert.NotContains(t, string(gomod), "github.com/enetx/surf")
 
 	clientGo, err := os.ReadFile(filepath.Join(outputDir, "internal", "client", "client.go"))
