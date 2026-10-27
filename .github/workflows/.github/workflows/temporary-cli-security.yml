@@ -1,0 +1,63 @@
+name: Temporary CLI isolation preflight
+'on':
+  pull_request:
+    branches:
+    - main
+    paths:
+    - .github/workflows/temporary-cli-security.yml
+permissions: {}
+jobs:
+  preflight:
+    if: github.head_ref == 'security/temporary-cli-readonly-validation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - uses: actions/setup-go@v6
+      with:
+        go-version: 1.26.10
+        cache: false
+    - name: Fail-closed isolated loopback and toolchain probe only
+      shell: bash
+      run: |
+        set -euo pipefail
+        uid=$(id -u); gid=$(id -g)
+        go_bin="$(go env GOROOT)/bin/go"
+        gomodcache=$(mktemp -d)
+        clean_home=$(mktemp -d)
+        trap 'rm -rf "$clean_home" "$gomodcache"' EXIT
+        cat > "$clean_home/test.sh" <<'TEST'
+        set -euo pipefail
+        test "$(id -u)" != 0
+        grep -q '^NoNewPrivs:[[:space:]]*1$' /proc/self/status
+        test "$(awk '/^CapEff:/ {print $2}' /proc/self/status)" = 0000000000000000
+        test "$(awk '/^CapBnd:/ {print $2}' /proc/self/status)" = 0000000000000000
+        python3 - <<'PROBE'
+        import socket, threading
+        server=socket.socket(); server.bind(('127.0.0.1',0)); server.listen()
+        thread=threading.Thread(target=lambda: server.accept()[0].close()); thread.start()
+        client=socket.create_connection(server.getsockname(),timeout=2); client.close(); thread.join(2); server.close()
+        assert not thread.is_alive(), 'loopback mock connectivity failed'
+        try:
+            socket.create_connection(('1.1.1.1',443),timeout=2)
+        except OSError:
+            pass
+        else:
+            raise SystemExit('outbound connectivity unexpectedly available')
+        print('isolation verified: loopback works, outbound denied, no privileges')
+        PROBE
+        echo ISOLATION_READY
+        test "$(go version)" = "go version go1.26.10 linux/amd64"
+        echo PREFLIGHT_PASS
+        TEST
+        cat > "$clean_home/namespace.sh" <<'NAMESPACE'
+        set -euo pipefail
+        ip link set lo up
+        test "$(ip -o link | wc -l)" = 1
+        test -z "$(ip route show default)"
+        exec setpriv --reuid="$1" --regid="$2" --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs \
+          env -i PATH="$(dirname "$3"):/usr/bin:/bin" HOME="$5" TMPDIR="$5" GOMODCACHE="$4" GOCACHE="$5/go-build" \
+          GOFLAGS=-mod=readonly GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local DIGG_LIVE_TESTS=0 PRINTING_PRESS_VERIFY=1 \
+          /bin/bash "$5/test.sh"
+        NAMESPACE
+        # Fail closed if ordinary runner sudo/network-namespace setup is unsupported.
+        sudo -n unshare --net --fork /bin/bash "$clean_home/namespace.sh" "$uid" "$gid" "$go_bin" "$gomodcache" "$clean_home"
