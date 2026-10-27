@@ -1,6 +1,6 @@
 module github.com/mvanhorn/cli-printing-press/v4
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/dave/dst v0.27.4
