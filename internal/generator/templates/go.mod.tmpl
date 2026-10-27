@@ -1,14 +1,17 @@
 module {{modulePath}}
 
-go 1.26.3
+go 1.26.10
 
 require (
 {{- if .UsesBrowserHTTPTransport}}
 	github.com/enetx/surf v1.0.199
+	github.com/klauspost/compress v1.18.7
+	github.com/quic-go/quic-go v0.59.1
+	golang.org/x/net v0.62.0
 {{- end}}
 	github.com/spf13/cobra v1.9.1
-{{- if .HasHTMLExtraction}}
-	golang.org/x/net v0.53.0
+{{- if and .HasHTMLExtraction (not .UsesBrowserHTTPTransport)}}
+	golang.org/x/net v0.62.0
 {{- end}}
 {{- if eq .Config.Format "toml"}}
 	github.com/pelletier/go-toml/v2 v2.2.4
